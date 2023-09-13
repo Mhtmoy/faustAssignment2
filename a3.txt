@@ -1,0 +1,100 @@
+import("stdfaust.lib");
+
+freq = vslider("freq", 200, 20, 2000, 0.01) : si.smoo;
+gain = vslider("gain", 0, 0, 1, 0.01) : si.smoo;
+// square wave oscillator whose frequency is controlled by the hjorizontal slider above
+osq = os.square(freq) * gain; // the full-scale output is scaled to a max. amplitude of 0.1
+
+// triangle wave oscillator, same freqeuncy control as above
+ost = os.triangle(freq) * gain;
+
+// sine wave oscillator
+oss = os.oscsin(freq) * gain;
+
+// sawtooth wave oscillator
+osa = os.sawtooth(freq) * gain;
+
+// pulse wave oscillator, the second parameter is the duty cycle length in the possible range of [0 ... 1]
+osp = os.pulsetrain(freq, 0.1) * gain;
+audioInput = ba.selectmulti(ma.SR/10, (osq,ost,oss,osa,osp,_), nentry("choice[style:radio{'square':0;'triangle':1;'sine':2;'sawtooth':3;'pulsetrain':4;'audio input':5}]", 0, 0, 5, 1));
+
+gt = checkbox("generate");
+// gate triggers the adsr with parameters attack, decay, sustain level, release
+// attack, decay, and release are given in seconds, sustain is an amplitude 
+source = _;
+ADSRgate = checkbox("ADSR ON/OFF");
+ADSR = hgroup("1.Sound Generator", audioInput * en.adsr(A_c, D_c, S_c, R_c, gt));
+
+A_c = vslider("h:ADSR/[0]Attack[style:knob]",0.01,0.,10.,0.1);//attack
+D_c = vslider("h:ADSR/[1]Decay[style:knob]",0.3,0.,10.,0.1);//decay
+S_c = vslider("h:ADSR/[2]Sustain[style:knob]",0.2,0.,1.,0.1);//sustain
+R_c = vslider("h:ADSR/[3]Realease[style:knob]",1.6,0.,10.,0.1);//release
+//InputSelect = _,
+sourceComing = _ * 0.3;
+
+freqq = vslider("fc", 0.01, 0, 1, 0.01) : si.smoo;
+fqu = vslider("Q", 1, 0.5, 9.5, 0.01) : si.smoo;
+
+// Korg resonant highpass filter, frequency control normalized [0...1], filter Q is not to exceed 10
+// Normalized frequency ranges between 0 Hz = 0, and Nyquist = 1 (sr/2 = 1)
+filt1 = ve.korg35HPF(freqq, fqu);
+// Korg resonant lowpass filter
+filt2 = ve.korg35LPF(freqq, fqu);
+
+// Oberheim style bandpass filter
+filt3 = ve.oberheimBPF(freqq, fqu);
+// Oberheim style band-notch filter
+filt4 = ve.oberheimBSF(freqq, fqu);
+// Oberheim resonant lowpass filter
+filt5 = ve.oberheimLPF(freqq, fqu);
+
+// classic reson lowpass filter. freq scaled to max. 2000 Hertz with 20 Hz offset, gain = 1
+// resonlp can have much higher Q values realtive to the ve. filters used above
+filt6 = fi.resonlp(freqq*2000+20, fqu*5, 1);
+
+gate1 = checkbox("Filter ON/OFF") ;
+// replace the filt. signal below with one of the filter signals above (filt1, filt2, ..., or filt6)
+//FILTERS = 
+FILTERbox = hgroup("2.FILTERbox",_ <:_, (ba.selectmulti(ma.SR/10, (filt1,filt2,filt3,filt4,filt5,filt6), nentry("choice[style:menu{'Korg resonant highpass':1;'Korg resonant lowpass':2;'Oberheim bandpass':3;'Oberheim band-notch':4;'Oberheim resonant lowpass':5;'classic reson lowpass':6}]", 1, 1, 6, 1))) : select2(gate1));
+
+
+//echo function
+ECHO = vgroup("3.ECHO", ef.echo1s); 
+/*
+LOOPER
+*/
+length = hslider("duration", 1, .5, 3, 0.1);
+tableSize = 48000;
+recIndex = (+(1) : %(tableSize)) ~ *(enve > 0);
+readIndex = readSpeed/float(ma.SR) : (+ : ma.frac) ~ _ : *(float(tableSize)) : int;
+readIndexReverse = readSpeed/float(ma.SR) : (- : ma.frac) ~ _ : *(float(tableSize)) : int;
+readSpeed = hslider("[0]Read Speed",1,0.1,10,0.01);
+record = button("[1]Sample") : int;
+
+// os.lf_sawpos_phase_reset//
+trigger = ba.pulsen(tableSize*.99, tableSize) : si.smoo;
+enve = en.asr (0.1, 1, 0.9, record);
+looper = rwtable(tableSize,0.0,recIndex,_,readIndex) ;
+looperrev = rwtable(tableSize,0.0,recIndex,_,readIndexReverse) ;
+rev = checkbox("[2]Reverse");
+// rev_trig = ba.pulsen(tableSize, tableSize*2);// : si.smoo;//
+
+// process = *(enve) : looper <: _,_;
+LOOPGATE = checkbox("Looper on/Off");
+LOOPER = hgroup("LOOPER", _<:_,(*(enve) <: ba.selectmulti(ma.SR/10,(looper, looperrev),rev) : *(trigger) ) : select2(LOOPGATE));
+
+
+
+vmeter(x)		= attach(x, envelop(x) : vbargraph("[2][unit:dB]", -70, +5));
+hmeter(x)		= attach(x, envelop(x) : hbargraph("[2][unit:dB]", -70, +5));
+
+envelop         = abs : max ~ -(1.0/ma.SR) : max(ba.db2linear(-70)) : ba.linear2db;
+
+VOLmeter 		= hgroup("0.VOLUME", _ <: hmeter,hmeter);
+
+
+//process =  ADSR : FILTERbox :ECHO : LOOPER : VOLmeter;
+
+process = hgroup("1.Sound Generator", (ba.selectmulti(ma.SR/10, (osq,ost,oss,osa,osp,_), nentry("choice[style:radio{'square':0;'triangle':1;'sine':2;'sawtooth':3;'pulsetrain':4;'audio input':5}]", 0, 0, 5, 1))) * en.adsr(A_c, D_c, S_c, R_c, gt)) :hgroup("2.FILTERbox",_ <:_, (ba.selectmulti(ma.SR/10, (filt1,filt2,filt3,filt4,filt5,filt6), nentry("choice[style:menu{'Korg resonant highpass':1;'Korg resonant lowpass':2;'Oberheim bandpass':3;'Oberheim band-notch':4;'Oberheim resonant lowpass':5;'classic reson lowpass':6}]", 1, 1, 6, 1))) : select2(gate1)) : vgroup("3.ECHO", ef.echo1s) : hgroup("LOOPER", _<:_,(*(enve) <: ba.selectmulti(ma.SR/10,(looper, looperrev),rev) : *(trigger) ) : select2(LOOPGATE)) : hgroup("0.VOLUME", _ <: hmeter,hmeter);
+
+
